@@ -375,7 +375,7 @@ function spawnBoom(shape) {
   // GIF overlay — cache-bust src so animation always restarts from frame 1
   const size = Math.max(shape.r * 3.8, 240);
   const el   = document.createElement('img');
-  el.src     = 'assets/boom.gif';
+  el.src     = 'assets/explosion.gif';
   Object.assign(el.style, {
     position: 'fixed', zIndex: '5', pointerEvents: 'none',
     width: size + 'px', height: size + 'px',
@@ -384,8 +384,9 @@ function spawnBoom(shape) {
     opacity: '1', transition: 'opacity 0.35s',
   });
   document.body.appendChild(el);
-  setTimeout(() => { el.style.opacity = '0'; }, 1300);
-  setTimeout(() => el.remove(), 1680);
+  const fadeAt = Math.max(BOOM_DURATION - 320, 400);
+  setTimeout(() => { el.style.transition = 'opacity 0.28s'; el.style.opacity = '0'; }, fadeAt);
+  setTimeout(() => el.remove(), fadeAt + 320);
 }
 
 function spawn(shape) {
@@ -425,6 +426,27 @@ const IMGS = {};
   IMGS[n] = Object.assign(new Image(), { src: 'assets/' + n + '.png' });
 });
 function imgReady(name) { return IMGS[name].complete && IMGS[name].naturalWidth > 0; }
+
+// Parse explosion.gif frame delays so the fade-out lands exactly before the loop.
+// Falls back to 1400ms if fetch isn't available (e.g. file:// protocol).
+let BOOM_DURATION = 1400;
+fetch('assets/explosion.gif').then(r => r.arrayBuffer()).then(buf => {
+  const b = new Uint8Array(buf);
+  let ms = 0, i = 13 + ((b[10] >> 7) ? 3 << ((b[10] & 7) + 1) : 0);
+  while (i < b.length) {
+    if (b[i] === 0x3B) break;
+    if (b[i] === 0x21 && b[i + 1] === 0xF9) {
+      ms += (b[i + 4] | (b[i + 5] << 8)) * 10; // centiseconds → ms
+      i += 8;
+    } else if (b[i] === 0x21) {
+      i += 2; while (b[i]) i += b[i] + 1; i++;
+    } else if (b[i] === 0x2C) {
+      const lct = (b[i + 9] >> 7) ? 3 << ((b[i + 9] & 7) + 1) : 0;
+      i += 10 + lct + 1; while (b[i]) i += b[i] + 1; i++;
+    } else i++;
+  }
+  if (ms > 100) BOOM_DURATION = ms;
+}).catch(() => {});
 
 // ── Object renderers ─────────────────────────────────────────────
 function drawBasketball(c, x, y, r, a) {
