@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Entropy</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { overflow:hidden; background:#08001a; font-family:'Courier New',monospace; }
+  canvas { position:absolute; top:0; left:0; }
+  #bg { z-index:0; }
+  #fg { z-index:1; cursor:none; }
+  #clearBtn {
+    position:fixed; z-index:10; top:24px; right:24px;
+    background:transparent; border:1px solid #ff71ce;
+    color:#ff71ce; padding:10px 22px;
+    font-family:'Courier New',monospace; font-size:11px;
+    letter-spacing:4px; cursor:pointer; text-transform:uppercase;
+    box-shadow:0 0 18px #ff71ce33; transition:all .2s;
+  }
+  #clearBtn:hover { background:#ff71ce14; box-shadow:0 0 34px #ff71ce55; }
+  #hint {
+    position:fixed; z-index:10; bottom:26px; left:26px;
+    color:#b566ff55; font-size:11px; letter-spacing:3px;
+    pointer-events:none; transition:color .4s;
+  }
+  #hint.pop { color:#ff71cecc; }
+</style>
+</head>
+<body>
+<canvas id="bg"></canvas>
+<canvas id="fg"></canvas>
+<button id="clearBtn">✕  CLEAR</button>
+<div id="hint">draw a shape</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+<script>
+// ── Canvas ───────────────────────────────────────────────────────
+const bgC = document.getElementById('bg'), bgX = bgC.getContext('2d');
+const fgC = document.getElementById('fg'), gx  = fgC.getContext('2d');
+let W = innerWidth, H = innerHeight;
+
+function setSize() {
+  W = innerWidth; H = innerHeight;
+  bgC.width = fgC.width = W;
+  bgC.height = fgC.height = H;
+  drawRoom();
+}
+setSize();
+addEventListener('resize', setSize);
+
+// ── Vaporwave room ───────────────────────────────────────────────
+function drawRoom() {
+  const c = bgX;
+  c.clearRect(0, 0, W, H);
+
+  // back-wall portal corners
+  const bwl = W * .13, bwr = W * .87;
+  const bwt = H * .04, bwb = H * .73;
+
+  // base fill
+  const base = c.createLinearGradient(0, 0, 0, H);
+  base.addColorStop(0,   '#09001c');
+  base.addColorStop(.44, '#190034');
+  base.addColorStop(1,   '#0c0018');
+  c.fillStyle = base; c.fillRect(0, 0, W, H);
+
+  // ceiling
+  c.beginPath();
+  c.moveTo(0,0); c.lineTo(W,0); c.lineTo(bwr,bwt); c.lineTo(bwl,bwt);
+  c.fillStyle = '#100025'; c.fill();
+
+  // floor
+  c.beginPath();
+  c.moveTo(0,H); c.lineTo(W,H); c.lineTo(bwr,bwb); c.lineTo(bwl,bwb);
+  const fg = c.createLinearGradient(0,bwb,0,H);
+  fg.addColorStop(0,'#1a003c'); fg.addColorStop(1,'#0b001e');
+  c.fillStyle = fg; c.fill();
+
+  // left wall
+  c.beginPath();
+  c.moveTo(0,0); c.lineTo(bwl,bwt); c.lineTo(bwl,bwb); c.lineTo(0,H);
+  c.fillStyle = '#110026'; c.fill();
+
+  // right wall
+  c.beginPath();
+  c.moveTo(W,0); c.lineTo(bwr,bwt); c.lineTo(bwr,bwb); c.lineTo(W,H);
+  c.fillStyle = '#110026'; c.fill();
+
+  // back wall
+  c.fillStyle = '#1d003e';
+  c.fillRect(bwl, bwt, bwr-bwl, bwb-bwt);
+
+  function line(x1,y1,x2,y2,a) {
+    c.globalAlpha = a; c.beginPath();
+    c.moveTo(x1,y1); c.lineTo(x2,y2); c.stroke();
+  }
+
+  // floor grid — converging lines
+  c.strokeStyle = '#8833cc'; c.lineWidth = .8; c.globalAlpha = 1;
+  const FN = 14;
+  for (let i = 0; i <= FN; i++) {
+    const t = i / FN;
+    line(bwl+(bwr-bwl)*t, bwb, W*t, H, .62);
+  }
+  // floor grid — horizontal (perspective spaced)
+  const HN = 12;
+  for (let i = 0; i <= HN; i++) {
+    const t = Math.pow(i/HN, 1.45);
+    const y  = bwb + (H-bwb)*t;
+    const x1 = bwl*(1-t), x2 = bwr+(W-bwr)*t;
+    line(x1,y,x2,y, .45 + t*.35);
+  }
+
+  // ceiling grid
+  c.strokeStyle = '#6622aa';
+  for (let i = 0; i <= FN; i++) {
+    const t = i/FN;
+    line(bwl+(bwr-bwl)*t, bwt, W*t, 0, .38);
+  }
+  for (let i = 0; i <= 6; i++) {
+    const t = i/6;
+    const y  = bwt*(1-t);
+    const x1 = bwl*t, x2 = W-(W-bwr)*t;
+    line(x1,y,x2,y, .32);
+  }
+
+  // back wall grid
+  c.strokeStyle = '#7722bb'; c.lineWidth = .9;
+  for (let i = 0; i <= 12; i++) {
+    const x = bwl + (bwr-bwl)*i/12;
+    line(x,bwt,x,bwb, .55);
+  }
+  for (let i = 0; i <= 9; i++) {
+    const y = bwt + (bwb-bwt)*i/9;
+    line(bwl,y,bwr,y, .55);
+  }
+
+  // side wall lines
+  c.strokeStyle = '#4411aa';
+  for (let i = 1; i < 6; i++) {
+    const t = i/6;
+    line(bwl, bwt+(bwb-bwt)*t, 0, H*t, .28);
+    line(bwr, bwt+(bwb-bwt)*t, W, H*t, .28);
+  }
+
+  c.globalAlpha = 1;
+
+  // central glow on back wall
+  const gl = c.createRadialGradient(W/2,(bwt+bwb)/2,0, W/2,(bwt+bwb)/2,W*.55);
+  gl.addColorStop(0,'#ee55ff1a'); gl.addColorStop(.5,'#9933ff0d'); gl.addColorStop(1,'transparent');
+  c.fillStyle = gl; c.fillRect(0,0,W,H);
+
+  // side ambient (cyan tinge)
+  const glL = c.createRadialGradient(0,H*.5,0, 0,H*.5,W*.25);
+  glL.addColorStop(0,'#0055ff0e'); glL.addColorStop(1,'transparent');
+  c.fillStyle = glL; c.fillRect(0,0,W,H);
+  const glR = c.createRadialGradient(W,H*.5,0, W,H*.5,W*.25);
+  glR.addColorStop(0,'#0055ff0e'); glR.addColorStop(1,'transparent');
+  c.fillStyle = glR; c.fillRect(0,0,W,H);
+}
+
+// ── Physics ──────────────────────────────────────────────────────
+const { Engine, World, Bodies, Mouse, MouseConstraint, Query } = Matter;
+const engine = Engine.create({ gravity: { y: 1.8 } });
+const world  = engine.world;
+
+World.add(world, [
+  Bodies.rectangle(W/2, H+25,  W*3, 50,  { isStatic:true }),
+  Bodies.rectangle(-25,  H/2,  50,  H*3, { isStatic:true }),
+  Bodies.rectangle(W+25, H/2,  50,  H*3, { isStatic:true }),
+]);
+
+const mouse = Mouse.create(fgC);
+const mc = MouseConstraint.create(engine, {
+  mouse,
+  constraint: { stiffness: .15, render: { visible: false } }
+});
+World.add(world, mc);
+
+// ── Drawing state ────────────────────────────────────────────────
+let drawing = false, pts = [];
+const objs = [];
+const mPos = { x: 0, y: 0 };
+
+fgC.addEventListener('mousemove', e => {
+  mPos.x = e.clientX; mPos.y = e.clientY;
+  if (drawing) pts.push({ x: e.clientX, y: e.clientY });
+});
+
+fgC.addEventListener('mousedown', e => {
+  const hit = Query.point(objs.map(o => o.body), { x: e.clientX, y: e.clientY });
+  if (!hit.length) { drawing = true; pts = [{ x: e.clientX, y: e.clientY }]; }
+});
+
+fgC.addEventListener('mouseup',    endDraw);
+fgC.addEventListener('mouseleave', endDraw);
+
+function endDraw() {
+  if (!drawing) return;
+  drawing = false;
+  if (pts.length > 6) {
+    const res = recognize(pts);
+    if (res) spawn(res);
+  }
+  pts = [];
+}
+
+// ── Shape recognition ────────────────────────────────────────────
+function recognize(pts) {
+  const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  const y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const bw = x1-x0, bh = y1-y0;
+  if (bw < 15 && bh < 15) return null;
+
+  const cx = (x0+x1)/2, cy = (y0+y1)/2;
+
+  let perim = 0;
+  for (let i = 1; i < pts.length; i++)
+    perim += Math.hypot(pts[i].x-pts[i-1].x, pts[i].y-pts[i-1].y);
+
+  let area = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i+1) % pts.length;
+    area += pts[i].x*pts[j].y - pts[j].x*pts[i].y;
+  }
+  area = Math.abs(area) / 2;
+
+  const circ  = (4*Math.PI*area) / (perim*perim);
+  const elong  = Math.max(bw,bh) / (Math.min(bw,bh) || 1);
+  const d0     = Math.hypot(pts[0].x - pts[pts.length-1].x, pts[0].y - pts[pts.length-1].y);
+  const closed = d0 < Math.hypot(bw,bh) * 0.38;
+
+  // circle/oval → ball
+  if (closed && circ > 0.40)
+    return { type:'ball', cx, cy, r: Math.min(Math.max(Math.max(bw,bh)/2, 25), 85) };
+
+  // elongated stroke → banana
+  if (elong > 1.9)
+    return { type:'banana', cx, cy, bw, bh };
+
+  // any other closed shape → ball
+  if (closed && Math.hypot(bw,bh) > 50)
+    return { type:'ball', cx, cy, r: Math.min(Math.max(Math.max(bw,bh)/2, 25), 85) };
+
+  return null;
+}
+
+// ── Spawn objects ────────────────────────────────────────────────
+function showHint(text) {
+  const el = document.getElementById('hint');
+  el.textContent = text; el.classList.add('pop');
+  setTimeout(() => { el.textContent = 'draw a shape'; el.classList.remove('pop'); }, 2400);
+}
+
+function spawn(shape) {
+  if (shape.type === 'ball') {
+    const bowling = Math.random() < .5;
+    const body = Bodies.circle(shape.cx, shape.cy, shape.r, {
+      restitution: bowling ? .04  : .80,
+      friction:    bowling ? .50  : .15,
+      frictionAir: bowling ? .003 : .007,
+      density:     bowling ? .030 : .0018,
+      label:       bowling ? 'bowling' : 'basketball',
+    });
+    World.add(world, body);
+    objs.push({ body, type: bowling ? 'bowling' : 'basketball', r: shape.r });
+    showHint(bowling ? 'bowling ball' : 'basketball');
+
+  } else {
+    const w = Math.min(Math.max(shape.bw, 60), 170);
+    const h = Math.min(Math.max(shape.bh * .38, 18), 52);
+    const body = Bodies.rectangle(shape.cx, shape.cy, w, h, {
+      restitution: .22, friction: .6, frictionAir: .012,
+      density: .0008, label: 'banana',
+    });
+    World.add(world, body);
+    objs.push({ body, type:'banana', bw:w, bh: Math.max(shape.bh, 30) });
+    showHint('banana');
+  }
+}
+
+// ── Object renderers ─────────────────────────────────────────────
+function drawBasketball(c, x, y, r, a) {
+  c.save(); c.translate(x,y); c.rotate(a);
+  const g = c.createRadialGradient(-r*.3,-r*.3,0, 0,0,r);
+  g.addColorStop(0,'#ffa050'); g.addColorStop(.7,'#e06200'); g.addColorStop(1,'#7c2d00');
+  c.beginPath(); c.arc(0,0,r,0,Math.PI*2);
+  c.fillStyle = g; c.fill();
+
+  c.strokeStyle = '#1a0000'; c.lineWidth = Math.max(1.5, r*.045);
+  c.beginPath(); c.arc(0,0,r,0,Math.PI*2); c.stroke();
+  c.beginPath(); c.moveTo(-r,0); c.lineTo(r,0); c.stroke();
+  c.beginPath(); c.moveTo(0,-r); c.lineTo(0,r); c.stroke();
+  c.beginPath(); c.arc(0,0,r*.74,-Math.PI*.66,Math.PI*.66); c.stroke();
+  c.beginPath(); c.arc(0,0,r*.74, Math.PI*.34,Math.PI*1.66); c.stroke();
+
+  // shine
+  const sh = c.createRadialGradient(-r*.28,-r*.28,0, -r*.28,-r*.28,r*.35);
+  sh.addColorStop(0,'#ffffff28'); sh.addColorStop(1,'transparent');
+  c.beginPath(); c.arc(0,0,r,0,Math.PI*2); c.fillStyle=sh; c.fill();
+  c.restore();
+}
+
+function drawBowlingBall(c, x, y, r, a) {
+  c.save(); c.translate(x,y); c.rotate(a);
+  const g = c.createRadialGradient(-r*.35,-r*.35,0, 0,0,r);
+  g.addColorStop(0,'#36365a'); g.addColorStop(.6,'#111128'); g.addColorStop(1,'#040410');
+  c.beginPath(); c.arc(0,0,r,0,Math.PI*2);
+  c.fillStyle = g; c.fill();
+
+  const sh = c.createRadialGradient(-r*.3,-r*.3,0, -r*.3,-r*.3,r*.48);
+  sh.addColorStop(0,'#ffffff1c'); sh.addColorStop(1,'transparent');
+  c.fillStyle = sh; c.fill();
+
+  c.fillStyle = '#000010';
+  c.beginPath(); c.arc(-r*.14,-r*.22,r*.13,0,Math.PI*2); c.fill();
+  c.beginPath(); c.arc( r*.18,-r*.26,r*.10,0,Math.PI*2); c.fill();
+  c.beginPath(); c.arc( r*.24, r*.10,r*.10,0,Math.PI*2); c.fill();
+  c.restore();
+}
+
+function drawBanana(c, x, y, bw, bh, a) {
+  c.save(); c.translate(x,y); c.rotate(a);
+  const w = bw * .88, h = bh * .88;
+
+  c.beginPath();
+  c.moveTo(-w/2,  h*.12);
+  c.quadraticCurveTo(-w*.18, -h*.55,  w/2,  -h*.10);
+  c.quadraticCurveTo( w*.58,  h*.36,  w*.28,  h*.52);
+  c.quadraticCurveTo( 0,      h*.68, -w*.28,  h*.40);
+  c.quadraticCurveTo(-w*.60,  h*.18, -w/2,    h*.12);
+  c.closePath();
+
+  const bg = c.createLinearGradient(0,-h/2, 0,h/2);
+  bg.addColorStop(0,'#ffe644'); bg.addColorStop(.5,'#ffd700'); bg.addColorStop(1,'#c49a00');
+  c.fillStyle = bg; c.fill();
+  c.strokeStyle = '#7a5200'; c.lineWidth = 1.8; c.stroke();
+
+  // stem tip
+  c.beginPath();
+  c.moveTo(-w/2+1, h*.12);
+  c.lineTo(-w/2 - w*.08, -h*.05);
+  c.strokeStyle = '#4a2e00'; c.lineWidth = 3; c.stroke();
+
+  // highlight
+  c.strokeStyle = '#fff8a044'; c.lineWidth = 2;
+  c.beginPath();
+  c.moveTo(-w*.3, -h*.35);
+  c.quadraticCurveTo( w*.05, -h*.52, w*.35, -h*.22);
+  c.stroke();
+
+  c.restore();
+}
+
+// ── Render loop ───────────────────────────────────────────────────
+let lastT = 0;
+function loop(t) {
+  const dt = Math.min(t - lastT, 33);
+  lastT = t;
+  Engine.update(engine, dt);
+  gx.clearRect(0, 0, W, H);
+
+  // in-progress stroke
+  if (pts.length > 1) {
+    gx.save();
+    gx.strokeStyle = '#ff71ce'; gx.lineWidth = 2.5;
+    gx.lineCap = 'round'; gx.lineJoin = 'round';
+    gx.shadowColor = '#ff71ce'; gx.shadowBlur = 10;
+    gx.beginPath(); gx.moveTo(pts[0].x, pts[0].y);
+    for (const p of pts) gx.lineTo(p.x, p.y);
+    gx.stroke(); gx.restore();
+  }
+
+  // physics objects
+  for (const o of objs) {
+    const { x, y } = o.body.position, a = o.body.angle;
+    if      (o.type === 'basketball') drawBasketball(gx, x, y, o.r, a);
+    else if (o.type === 'bowling')    drawBowlingBall(gx, x, y, o.r, a);
+    else                              drawBanana(gx, x, y, o.bw, o.bh, a);
+  }
+
+  // brush cursor
+  gx.save();
+  gx.strokeStyle = '#ff71ce'; gx.lineWidth = 1.5;
+  gx.shadowColor = '#ff71ce'; gx.shadowBlur = 8;
+  gx.beginPath(); gx.arc(mPos.x, mPos.y, 5, 0, Math.PI*2); gx.stroke();
+  gx.beginPath();
+  gx.moveTo(mPos.x, mPos.y - 13);
+  gx.lineTo(mPos.x + 3, mPos.y - 7);
+  gx.lineTo(mPos.x - 3, mPos.y - 7);
+  gx.closePath();
+  gx.fillStyle = '#ff71ce55'; gx.fill(); gx.stroke();
+  gx.restore();
+
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// ── Clear ─────────────────────────────────────────────────────────
+document.getElementById('clearBtn').addEventListener('click', () => {
+  for (const o of objs) World.remove(world, o.body);
+  objs.length = 0;
+});
+</script>
+</body>
+</html>
