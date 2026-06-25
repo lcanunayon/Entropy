@@ -160,22 +160,120 @@ function drawRoom() {
 }
 
 // ── Physics ──────────────────────────────────────────────────────
-const { Engine, World, Bodies, Mouse, MouseConstraint, Query } = Matter;
+const { Engine, World, Bodies, Body, Events, Mouse, MouseConstraint, Query } = Matter;
 const engine = Engine.create({ gravity: { y: 1.8 } });
 const world  = engine.world;
 
 World.add(world, [
-  Bodies.rectangle(W/2, H+25,  W*3, 50,  { isStatic:true }),
-  Bodies.rectangle(-25,  H/2,  50,  H*3, { isStatic:true }),
-  Bodies.rectangle(W+25, H/2,  50,  H*3, { isStatic:true }),
+  Bodies.rectangle(W/2, H+25,  W*3, 50,  { isStatic:true, friction:0.85, frictionStatic:1.0 }),
+  Bodies.rectangle(-25,  H/2,  50,  H*3, { isStatic:true, friction:0.5 }),
+  Bodies.rectangle(W+25, H/2,  50,  H*3, { isStatic:true, friction:0.5 }),
+  Bodies.rectangle(W/2,  15,   W*3, 60,  { isStatic:true }), // ceiling (bottom edge ≈ y=45)
 ]);
 
 const mouse = Mouse.create(fgC);
 const mc = MouseConstraint.create(engine, {
   mouse,
-  constraint: { stiffness: .15, render: { visible: false } }
+  constraint: { stiffness: .04, damping: .12, render: { visible: false } }
 });
 World.add(world, mc);
+
+// ── Audio (Web Audio API synthesis) ─────────────────────────────
+let _ac = null;
+function getAC() {
+  if (!_ac) _ac = new (window.AudioContext || window.webkitAudioContext)();
+  if (_ac.state === 'suspended') _ac.resume();
+  return _ac;
+}
+
+function synthTone(freq0, freq1, dur, vol, type = 'sine') {
+  const a = getAC(), t = a.currentTime;
+  const osc = a.createOscillator(), g = a.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq0, t);
+  osc.frequency.exponentialRampToValueAtTime(freq1, t + dur);
+  g.gain.setValueAtTime(Math.min(vol, 1), t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  osc.connect(g); g.connect(a.destination);
+  osc.start(t); osc.stop(t + dur);
+}
+
+function synthNoise(dur, cutoff, vol, delay = 0) {
+  const a = getAC(), t = a.currentTime + delay;
+  const len = Math.ceil(a.sampleRate * dur);
+  const buf = a.createBuffer(1, len, a.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+  const src = a.createBufferSource(); src.buffer = buf;
+  const lp  = a.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = cutoff;
+  const g   = a.createGain();
+  g.gain.setValueAtTime(Math.min(vol, 1), t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  src.connect(lp); lp.connect(g); g.connect(a.destination);
+  src.start(t); src.stop(t + dur);
+}
+
+function playBowlingThud(vol) {
+  const v = Math.max(0.15, vol);
+  synthTone(95, 28, 0.6, v * 1.4);
+  synthNoise(0.1, 280, v * 0.7);
+  synthNoise(0.2, 100, v * 0.4, 0.02);
+}
+
+function playBasketballBounce(vol) {
+  const v = Math.max(0.08, vol);
+  synthTone(240, 68, 0.2, v * 0.9);
+  synthNoise(0.05, 900, v * 0.35);
+}
+
+function playBallCollision(vol) {
+  const v = Math.max(0.08, vol);
+  synthTone(380, 160, 0.14, v * 0.8);
+  synthNoise(0.07, 1400, v * 0.5);
+}
+
+function playFruitThud(vol) {
+  synthTone(140, 55, 0.28, Math.max(0.05, vol) * 0.7);
+}
+
+function playExplosion() {
+  synthNoise(0.07, 8000, 0.75);               // initial crack
+  synthTone(85, 20, 1.0, 0.95, 'sawtooth');   // deep belly boom
+  synthNoise(0.55, 380, 0.80, 0.03);          // rumble body
+  synthNoise(0.22, 75,  0.55, 0.12);          // low thud tail
+}
+
+// per-body cooldown to avoid sound spam when resting
+const _soundCD = new WeakMap();
+function canSound(body) {
+  const now = Date.now();
+  if (now - (_soundCD.get(body) || 0) < 120) return false;
+  _soundCD.set(body, now);
+  return true;
+}
+
+Events.on(engine, 'collisionStart', (event) => {
+  for (const { bodyA, bodyB } of event.pairs) {
+    const speed = Math.hypot(
+      bodyA.velocity.x - bodyB.velocity.x,
+      bodyA.velocity.y - bodyB.velocity.y
+    );
+    if (speed < 1.5) continue;
+    const vol = Math.min(speed / 22, 1);
+
+    if (bodyA.isStatic || bodyB.isStatic) {
+      const b = bodyA.isStatic ? bodyB : bodyA;
+      if (!canSound(b)) continue;
+      if      (b.label === 'bowling')    playBowlingThud(vol);
+      else if (b.label === 'basketball') playBasketballBounce(vol);
+      else if (b.label === 'banana')     playFruitThud(vol);
+    } else {
+      const b = bodyA;
+      if (!canSound(b)) continue;
+      playBallCollision(vol);
+    }
+  }
+});
 
 // ── Drawing state ────────────────────────────────────────────────
 let drawing = false, pts = [];
@@ -211,39 +309,40 @@ function recognize(pts) {
   const x0 = Math.min(...xs), x1 = Math.max(...xs);
   const y0 = Math.min(...ys), y1 = Math.max(...ys);
   const bw = x1-x0, bh = y1-y0;
-  if (bw < 15 && bh < 15) return null;
-
   const cx = (x0+x1)/2, cy = (y0+y1)/2;
+  const diag = Math.hypot(bw, bh);
 
   let perim = 0;
   for (let i = 1; i < pts.length; i++)
     perim += Math.hypot(pts[i].x-pts[i-1].x, pts[i].y-pts[i-1].y);
 
+  // reject tiny or accidental strokes
+  if (perim < 70 || diag < 35) return null;
+
+  // closure: start and end within 38% of diagonal
+  const d0 = Math.hypot(pts[0].x - pts[pts.length-1].x, pts[0].y - pts[pts.length-1].y);
+  const closed = d0 < diag * 0.38;
+
+  // open stroke (arc, curve, crescent) → banana
+  if (!closed) return { type:'banana', cx, cy, bw, bh };
+
+  // closed stroke → determine ball
   let area = 0;
   for (let i = 0; i < pts.length; i++) {
     const j = (i+1) % pts.length;
     area += pts[i].x*pts[j].y - pts[j].x*pts[i].y;
   }
   area = Math.abs(area) / 2;
+  const circ = (4*Math.PI*area) / (perim*perim);
+  const elong = Math.max(bw,bh) / (Math.min(bw,bh) || 1);
 
-  const circ  = (4*Math.PI*area) / (perim*perim);
-  const elong  = Math.max(bw,bh) / (Math.min(bw,bh) || 1);
-  const d0     = Math.hypot(pts[0].x - pts[pts.length-1].x, pts[0].y - pts[pts.length-1].y);
-  const closed = d0 < Math.hypot(bw,bh) * 0.38;
+  // closed but very elongated (like a horizontal oval traced back) → banana
+  if (elong > 2.8 && circ < 0.35) return { type:'banana', cx, cy, bw, bh };
 
-  // circle/oval → ball
-  if (closed && circ > 0.40)
-    return { type:'ball', cx, cy, r: Math.min(Math.max(Math.max(bw,bh)/2, 25), 85) };
+  // closed + very spiky (low circularity) → boom
+  if (circ < 0.40) return { type:'boom', cx, cy, r: Math.min(Math.max(diag / 2, 40), 160) };
 
-  // elongated stroke → banana
-  if (elong > 1.9)
-    return { type:'banana', cx, cy, bw, bh };
-
-  // any other closed shape → ball
-  if (closed && Math.hypot(bw,bh) > 50)
-    return { type:'ball', cx, cy, r: Math.min(Math.max(Math.max(bw,bh)/2, 25), 85) };
-
-  return null;
+  return { type:'ball', cx, cy, r: 85 };
 }
 
 // ── Spawn objects ────────────────────────────────────────────────
@@ -253,12 +352,52 @@ function showHint(text) {
   setTimeout(() => { el.textContent = 'draw a shape'; el.classList.remove('pop'); }, 2400);
 }
 
+function spawnBoom(shape) {
+  playExplosion();
+  showHint('BOOM!');
+
+  // Blast every physics object outward from explosion centre
+  const blastR = Math.max(shape.r * 2.8, 220);
+  for (const o of objs) {
+    const dx = o.body.position.x - shape.cx;
+    const dy = o.body.position.y - shape.cy;
+    const dist = Math.hypot(dx, dy) || 1;
+    const falloff = Math.max(0, 1 - dist / blastR);
+    if (falloff > 0) {
+      const speed = 160 * falloff;
+      Body.setVelocity(o.body, {
+        x: o.body.velocity.x + (dx / dist) * speed,
+        y: o.body.velocity.y + (dy / dist) * speed - 25 * falloff,
+      });
+    }
+  }
+
+  // GIF overlay — cache-bust src so animation always restarts from frame 1
+  const size = Math.max(shape.r * 3.8, 240);
+  const el   = document.createElement('img');
+  el.src     = 'assets/boom.gif';
+  Object.assign(el.style, {
+    position: 'fixed', zIndex: '5', pointerEvents: 'none',
+    width: size + 'px', height: size + 'px',
+    left: (shape.cx - size / 2) + 'px',
+    top:  (shape.cy - size / 2) + 'px',
+    opacity: '1', transition: 'opacity 0.35s',
+  });
+  document.body.appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; }, 1300);
+  setTimeout(() => el.remove(), 1680);
+}
+
 function spawn(shape) {
+  if (shape.type === 'boom') {
+    spawnBoom(shape);
+    return;
+  }
   if (shape.type === 'ball') {
     const bowling = Math.random() < .5;
     const body = Bodies.circle(shape.cx, shape.cy, shape.r, {
       restitution: bowling ? .04  : .80,
-      friction:    bowling ? .50  : .15,
+      friction:    bowling ? .85  : .55,
       frictionAir: bowling ? .003 : .007,
       density:     bowling ? .030 : .0018,
       label:       bowling ? 'bowling' : 'basketball',
@@ -268,97 +407,78 @@ function spawn(shape) {
     showHint(bowling ? 'bowling ball' : 'basketball');
 
   } else {
-    const w = Math.min(Math.max(shape.bw, 60), 170);
-    const h = Math.min(Math.max(shape.bh * .38, 18), 52);
-    const body = Bodies.rectangle(shape.cx, shape.cy, w, h, {
-      restitution: .22, friction: .6, frictionAir: .012,
+    // Fixed dimensions — BH controls crescent depth, needs to be tall enough to curve
+    const BW = 130, BH = 58;
+    const body = Bodies.rectangle(shape.cx, shape.cy, BW * 0.85, BH * 0.48, {
+      restitution: .22, friction: .80, frictionAir: .012,
       density: .0008, label: 'banana',
     });
     World.add(world, body);
-    objs.push({ body, type:'banana', bw:w, bh: Math.max(shape.bh, 30) });
+    objs.push({ body, type: 'banana', bw: BW, bh: BH });
     showHint('banana');
   }
 }
 
+// ── Image assets ──────────────────────────────────────────────────
+const IMGS = {};
+['banana', 'bowling', 'basketball'].forEach(n => {
+  IMGS[n] = Object.assign(new Image(), { src: 'assets/' + n + '.png' });
+});
+function imgReady(name) { return IMGS[name].complete && IMGS[name].naturalWidth > 0; }
+
 // ── Object renderers ─────────────────────────────────────────────
 function drawBasketball(c, x, y, r, a) {
-  c.save(); c.translate(x,y); c.rotate(a);
-  const g = c.createRadialGradient(-r*.3,-r*.3,0, 0,0,r);
-  g.addColorStop(0,'#ffa050'); g.addColorStop(.7,'#e06200'); g.addColorStop(1,'#7c2d00');
-  c.beginPath(); c.arc(0,0,r,0,Math.PI*2);
-  c.fillStyle = g; c.fill();
-
-  c.strokeStyle = '#1a0000'; c.lineWidth = Math.max(1.5, r*.045);
-  c.beginPath(); c.arc(0,0,r,0,Math.PI*2); c.stroke();
-  c.beginPath(); c.moveTo(-r,0); c.lineTo(r,0); c.stroke();
-  c.beginPath(); c.moveTo(0,-r); c.lineTo(0,r); c.stroke();
-  c.beginPath(); c.arc(0,0,r*.74,-Math.PI*.66,Math.PI*.66); c.stroke();
-  c.beginPath(); c.arc(0,0,r*.74, Math.PI*.34,Math.PI*1.66); c.stroke();
-
-  // shine
-  const sh = c.createRadialGradient(-r*.28,-r*.28,0, -r*.28,-r*.28,r*.35);
-  sh.addColorStop(0,'#ffffff28'); sh.addColorStop(1,'transparent');
-  c.beginPath(); c.arc(0,0,r,0,Math.PI*2); c.fillStyle=sh; c.fill();
+  c.save(); c.translate(x, y); c.rotate(a);
+  c.beginPath(); c.arc(0, 0, r, 0, Math.PI * 2); c.clip();
+  if (imgReady('basketball')) c.drawImage(IMGS.basketball, -r, -r, r * 2, r * 2);
   c.restore();
 }
 
 function drawBowlingBall(c, x, y, r, a) {
-  c.save(); c.translate(x,y); c.rotate(a);
-  const g = c.createRadialGradient(-r*.35,-r*.35,0, 0,0,r);
-  g.addColorStop(0,'#36365a'); g.addColorStop(.6,'#111128'); g.addColorStop(1,'#040410');
-  c.beginPath(); c.arc(0,0,r,0,Math.PI*2);
-  c.fillStyle = g; c.fill();
-
-  const sh = c.createRadialGradient(-r*.3,-r*.3,0, -r*.3,-r*.3,r*.48);
-  sh.addColorStop(0,'#ffffff1c'); sh.addColorStop(1,'transparent');
-  c.fillStyle = sh; c.fill();
-
-  c.fillStyle = '#000010';
-  c.beginPath(); c.arc(-r*.14,-r*.22,r*.13,0,Math.PI*2); c.fill();
-  c.beginPath(); c.arc( r*.18,-r*.26,r*.10,0,Math.PI*2); c.fill();
-  c.beginPath(); c.arc( r*.24, r*.10,r*.10,0,Math.PI*2); c.fill();
+  c.save(); c.translate(x, y); c.rotate(a);
+  c.beginPath(); c.arc(0, 0, r, 0, Math.PI * 2); c.clip();
+  if (imgReady('bowling')) c.drawImage(IMGS.bowling, -r, -r, r * 2, r * 2);
   c.restore();
 }
 
 function drawBanana(c, x, y, bw, bh, a) {
-  c.save(); c.translate(x,y); c.rotate(a);
-  const w = bw * .88, h = bh * .88;
-
+  c.save(); c.translate(x, y); c.rotate(a);
+  const hw = bw * 0.5, bend = bh, fat = bh * 0.46;
+  // Clip to a generous crescent: tips raised to -bend*0.4 and clip wider
+  // than the image so the banana photo never gets cut at its endpoints.
+  const ex   = hw  * 1.1;   // slightly wider than image
+  const tipY = -bend * 0.40; // tips well above equator
   c.beginPath();
-  c.moveTo(-w/2,  h*.12);
-  c.quadraticCurveTo(-w*.18, -h*.55,  w/2,  -h*.10);
-  c.quadraticCurveTo( w*.58,  h*.36,  w*.28,  h*.52);
-  c.quadraticCurveTo( 0,      h*.68, -w*.28,  h*.40);
-  c.quadraticCurveTo(-w*.60,  h*.18, -w/2,    h*.12);
+  c.moveTo(-ex, tipY);
+  c.bezierCurveTo(-ex * 0.42, -(bend * 1.55), ex * 0.42, -(bend * 1.55), ex, tipY);
+  c.bezierCurveTo( ex * 0.50,  fat  * 1.55, -ex * 0.50,  fat  * 1.55, -ex, tipY);
   c.closePath();
-
-  const bg = c.createLinearGradient(0,-h/2, 0,h/2);
-  bg.addColorStop(0,'#ffe644'); bg.addColorStop(.5,'#ffd700'); bg.addColorStop(1,'#c49a00');
-  c.fillStyle = bg; c.fill();
-  c.strokeStyle = '#7a5200'; c.lineWidth = 1.8; c.stroke();
-
-  // stem tip
-  c.beginPath();
-  c.moveTo(-w/2+1, h*.12);
-  c.lineTo(-w/2 - w*.08, -h*.05);
-  c.strokeStyle = '#4a2e00'; c.lineWidth = 3; c.stroke();
-
-  // highlight
-  c.strokeStyle = '#fff8a044'; c.lineWidth = 2;
-  c.beginPath();
-  c.moveTo(-w*.3, -h*.35);
-  c.quadraticCurveTo( w*.05, -h*.52, w*.35, -h*.22);
-  c.stroke();
-
+  c.clip();
+  if (imgReady('banana')) c.drawImage(IMGS.banana, -hw, -bend, bw, bend + fat);
   c.restore();
 }
 
 // ── Render loop ───────────────────────────────────────────────────
 let lastT = 0;
+const prevMouse = { x: 0, y: 0 };
+
 function loop(t) {
   const dt = Math.min(t - lastT, 33);
   lastT = t;
   Engine.update(engine, dt);
+
+  // Smooth hang: when mouse is held still, bleed off spring oscillation
+  if (mc.body) {
+    const moved = Math.hypot(mPos.x - prevMouse.x, mPos.y - prevMouse.y);
+    if (moved < 1.5) {
+      Body.setVelocity(mc.body, {
+        x: mc.body.velocity.x * 0.55,
+        y: mc.body.velocity.y * 0.55,
+      });
+    }
+  }
+  prevMouse.x = mPos.x; prevMouse.y = mPos.y;
+
   gx.clearRect(0, 0, W, H);
 
   // in-progress stroke
