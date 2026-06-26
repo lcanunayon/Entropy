@@ -238,6 +238,19 @@ function playFruitThud(vol) {
   synthTone(140, 55, 0.28, Math.max(0.05, vol) * 0.7);
 }
 
+function playAxeThud(vol) {
+  const v = Math.max(0.1, vol);
+  synthTone(160, 48, 0.22, v * 0.8);
+  synthNoise(0.07, 500, v * 0.45);
+}
+
+function playPop(vol) {
+  const v = Math.max(0.4, vol);
+  synthNoise(0.04, 10000, v * 0.9);         // sharp crack
+  synthTone(320, 85, 0.14, v * 0.6);        // thump
+  synthNoise(0.12, 250, v * 0.35, 0.03);    // air rush
+}
+
 function playExplosion() {
   synthNoise(0.07, 8000, 0.75);               // initial crack
   synthTone(85, 20, 1.0, 0.95, 'sawtooth');   // deep belly boom
@@ -269,6 +282,7 @@ Events.on(engine, 'collisionStart', (event) => {
       if      (b.label === 'bowling')    playBowlingThud(vol);
       else if (b.label === 'basketball') playBasketballBounce(vol);
       else if (b.label === 'banana')     playFruitThud(vol);
+      else if (b.label === 'axe')        playAxeThud(vol);
     } else {
       const b = bodyA;
       if (!canSound(b)) continue;
@@ -284,15 +298,20 @@ const mPos = { x: 0, y: 0 };
 
 fgC.addEventListener('mousemove', e => {
   mPos.x = e.clientX; mPos.y = e.clientY;
-  if (drawing) pts.push({ x: e.clientX, y: e.clientY });
+  if (drawing) {
+    // If the mouse constraint grabbed a body on this frame, cancel the stroke
+    if (mc.body) { drawing = false; pts = []; }
+    else pts.push({ x: e.clientX, y: e.clientY });
+  }
 });
 
 fgC.addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
   const hit = Query.point(objs.map(o => o.body), { x: e.clientX, y: e.clientY });
   if (!hit.length) { drawing = true; pts = [{ x: e.clientX, y: e.clientY }]; }
 });
 
-fgC.addEventListener('mouseup',    endDraw);
+fgC.addEventListener('mouseup',    e => { if (e.button === 0) endDraw(); });
 fgC.addEventListener('mouseleave', endDraw);
 
 function endDraw() {
@@ -343,6 +362,21 @@ function recognize(pts) {
 
   // closed + very spiky (low circularity) → boom
   if (circ < 0.40) return { type:'boom', cx, cy, r: Math.min(Math.max(diag / 2, 40), 160) };
+
+  // Axe: closed, moderate circularity, somewhat elongated, one end clearly wider
+  // than the other (wide blade head vs narrow handle).
+  if (elong >= 1.2 && circ < 0.75) {
+    const topCut = y0 + bh * 0.35, botCut = y0 + bh * 0.65;
+    const tPts = pts.filter(p => p.y < topCut);
+    const bPts = pts.filter(p => p.y > botCut);
+    if (tPts.length >= 4 && bPts.length >= 4) {
+      const topW = Math.max(...tPts.map(p => p.x)) - Math.min(...tPts.map(p => p.x));
+      const botW = Math.max(...bPts.map(p => p.x)) - Math.min(...bPts.map(p => p.x));
+      if (topW > botW * 1.8 || botW > topW * 1.8) {
+        return { type: 'axe', cx, cy };
+      }
+    }
+  }
 
   return { type:'ball', cx, cy, r: 85 };
 }
@@ -401,6 +435,11 @@ function spawn(shape) {
     spawnBoom(shape);
     return;
   }
+  if (shape.type === 'axe') {
+    spawnAxe(shape.cx, shape.cy);
+    showHint('axe');
+    return;
+  }
   if (shape.type === 'ball') {
     const bowling = Math.random() < .5;
     const body = Bodies.circle(shape.cx, shape.cy, shape.r, {
@@ -429,10 +468,18 @@ function spawn(shape) {
 
 // ── Image assets ──────────────────────────────────────────────────
 const IMGS = {};
-['banana', 'bowling', 'basketball'].forEach(n => {
+['banana', 'bowling', 'basketball', 'axe'].forEach(n => {
   IMGS[n] = Object.assign(new Image(), { src: 'assets/' + n + '.png' });
 });
 function imgReady(name) { return IMGS[name].complete && IMGS[name].naturalWidth > 0; }
+
+// ── Axe constants ─────────────────────────────────────────────────
+// axe.png is 1920×1920 (square WebP). Compound body: handle (32×120 at y=+60)
+// + head (120×80 at y=-60). Centroid ≈ y=-26 → blade tip in local ≈ y=-74.
+const AXE_DRAW_W = 200, AXE_DRAW_H = 200;   // square draw, matches 1:1 aspect ratio
+const AXE_HEAD_OFFSET = 91;  // blade tip above body centroid in local space
+const AXE_HEAD_RADIUS = 60;  // pop-detection radius of blade
+const popEffects = [];
 
 // Parse explosion.gif frame delays so the fade-out lands exactly before the loop.
 // Falls back to 1400ms if fetch isn't available (e.g. file:// protocol).
@@ -489,6 +536,33 @@ function drawBanana(c, x, y, bw, bh, a) {
   c.restore();
 }
 
+function drawAxe(c, x, y, a) {
+  c.save();
+  c.translate(x, y);
+  c.rotate(a);
+  if (imgReady('axe')) {
+    // blade tip is AXE_HEAD_OFFSET above body centroid; handle bottom is (AXE_DRAW_H - AXE_HEAD_OFFSET) below
+    c.drawImage(IMGS.axe, -AXE_DRAW_W / 2, -AXE_HEAD_OFFSET, AXE_DRAW_W, AXE_DRAW_H);
+  }
+  c.restore();
+}
+
+function spawnAxe(x, y) {
+  // handle (32×120) below centroid, blade head (120×80) above centroid.
+  // Parts at construction-space offsets; Matter.js computes the centroid
+  // automatically so AXE_HEAD_OFFSET (74) matches the blade tip in local space.
+  const handle = Bodies.rectangle(0,  60, 60, 120);
+  const head   = Bodies.rectangle(0, -60, 120, 80);
+  const body   = Body.create({
+    parts: [handle, head],
+    restitution: 0.25, friction: 0.6, frictionAir: 0.018,
+    density: 0.008, label: 'axe',
+  });
+  Body.setPosition(body, { x: x ?? W / 2, y: y ?? H / 3 });
+  World.add(world, body);
+  objs.push({ body, type: 'axe', popCD: 0 });
+}
+
 // ── Render loop ───────────────────────────────────────────────────
 let lastT = 0;
 const prevMouse = { x: 0, y: 0 };
@@ -497,6 +571,31 @@ function loop(t) {
   const dt = Math.min(t - lastT, 33);
   lastT = t;
   Engine.update(engine, dt);
+
+  // Axe head → basketball pop (supports multiple axes via per-object cooldown)
+  for (const axeO of objs.filter(o => o.type === 'axe')) {
+    if (axeO.popCD > 0) { axeO.popCD--; continue; }
+    const ab  = axeO.body;
+    const ang = ab.angle;
+    const headSpeed = Math.hypot(ab.velocity.x, ab.velocity.y)
+      + Math.abs(ab.angularVelocity) * AXE_HEAD_OFFSET;
+    if (headSpeed < 3) continue;
+    const hx = ab.position.x + AXE_HEAD_OFFSET * Math.sin(ang);
+    const hy = ab.position.y - AXE_HEAD_OFFSET * Math.cos(ang);
+    for (let i = objs.length - 1; i >= 0; i--) {
+      const o = objs[i];
+      if (o.type !== 'basketball') continue;
+      if (Math.hypot(hx - o.body.position.x, hy - o.body.position.y) < o.r + AXE_HEAD_RADIUS) {
+        popEffects.push({ x: o.body.position.x, y: o.body.position.y, r: o.r, life: 30, maxLife: 30 });
+        World.remove(world, o.body);
+        objs.splice(i, 1);
+        playPop(Math.min(headSpeed / 15, 1));
+        showHint('POP!');
+        axeO.popCD = 30;
+        break;
+      }
+    }
+  }
 
   // Safety net: if a body somehow escaped the arena, pull it back
   for (const o of objs) {
@@ -541,7 +640,24 @@ function loop(t) {
     const { x, y } = o.body.position, a = o.body.angle;
     if      (o.type === 'basketball') drawBasketball(gx, x, y, o.r, a);
     else if (o.type === 'bowling')    drawBowlingBall(gx, x, y, o.r, a);
+    else if (o.type === 'axe')        drawAxe(gx, x, y, a);
     else                              drawBanana(gx, x, y, o.bw, o.bh, a);
+  }
+
+  // pop ring burst effects
+  for (let i = popEffects.length - 1; i >= 0; i--) {
+    const pe = popEffects[i];
+    const t  = pe.life / pe.maxLife;
+    pe.life--;
+    gx.save();
+    gx.globalAlpha = t * 0.9;
+    gx.strokeStyle = '#ff71ce'; gx.lineWidth = 3;
+    gx.shadowColor = '#ff71ce'; gx.shadowBlur = 18;
+    gx.beginPath();
+    gx.arc(pe.x, pe.y, pe.r + pe.r * (1 - t) * 1.8, 0, Math.PI * 2);
+    gx.stroke();
+    gx.restore();
+    if (pe.life <= 0) popEffects.splice(i, 1);
   }
 
   // brush cursor
@@ -565,6 +681,7 @@ requestAnimationFrame(loop);
 document.getElementById('clearBtn').addEventListener('click', () => {
   for (const o of objs) World.remove(world, o.body);
   objs.length = 0;
+  popEffects.length = 0;
 });
 </script>
 </body>
