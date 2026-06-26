@@ -24,6 +24,32 @@
     pointer-events:none; transition:color .4s;
   }
   #hint.pop { color:#ff71cecc; }
+  #settingsBtn {
+    position:fixed; z-index:10; bottom:62px; left:26px;
+    background:transparent; border:1px solid #ff71ce;
+    color:#ff71ce; padding:8px 18px;
+    font-family:'Courier New',monospace; font-size:11px;
+    letter-spacing:3px; cursor:pointer; text-transform:uppercase;
+    box-shadow:0 0 14px #ff71ce22; transition:all .2s;
+  }
+  #settingsBtn:hover { background:#ff71ce14; box-shadow:0 0 26px #ff71ce44; }
+  #settingsPanel {
+    position:fixed; z-index:10; bottom:108px; left:26px;
+    background:#08001aee; border:1px solid #ff71ce33;
+    padding:14px 16px; display:none; flex-direction:column; gap:8px;
+    backdrop-filter:blur(8px);
+  }
+  #settingsPanel.open { display:flex; }
+  #settingsPanel .sp-label { color:#ff71ce66; font-size:9px; letter-spacing:3px; margin-bottom:2px; }
+  .bg-opt {
+    background:transparent; border:1px solid #ff71ce33;
+    color:#ff71ce77; padding:7px 14px;
+    font-family:'Courier New',monospace; font-size:10px;
+    letter-spacing:2px; cursor:pointer; text-transform:uppercase; text-align:left;
+    transition:all .15s;
+  }
+  .bg-opt:hover { border-color:#ff71ce88; color:#ff71cecc; background:#ff71ce0d; }
+  .bg-opt.active { border-color:#ff71ce; color:#ff71ce; background:#ff71ce1a; }
 </style>
 </head>
 <body>
@@ -31,6 +57,12 @@
 <canvas id="fg"></canvas>
 <button id="clearBtn">✕  CLEAR</button>
 <div id="hint">draw a shape</div>
+<button id="settingsBtn">⚙ SCENE</button>
+<div id="settingsPanel">
+  <div class="sp-label">BACKGROUND</div>
+  <button class="bg-opt active" data-bg="vaporwave">Vaporwave</button>
+  <button class="bg-opt" data-bg="grandcanyon">Grand Canyon</button>
+</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
 <script>
@@ -38,6 +70,7 @@
 const bgC = document.getElementById('bg'), bgX = bgC.getContext('2d');
 const fgC = document.getElementById('fg'), gx  = fgC.getContext('2d');
 let W = innerWidth, H = innerHeight;
+let currentBg = 'vaporwave';
 
 function setSize() {
   W = innerWidth; H = innerHeight;
@@ -50,6 +83,7 @@ addEventListener('resize', setSize);
 
 // ── Vaporwave room ───────────────────────────────────────────────
 function drawRoom() {
+  if (currentBg === 'grandcanyon') { drawGrandCanyonBg(); return; }
   const c = bgX;
   c.clearRect(0, 0, W, H);
 
@@ -157,6 +191,50 @@ function drawRoom() {
   const glR = c.createRadialGradient(W,H*.5,0, W,H*.5,W*.25);
   glR.addColorStop(0,'#0055ff0e'); glR.addColorStop(1,'transparent');
   c.fillStyle = glR; c.fillRect(0,0,W,H);
+}
+
+function drawGrandCanyonBg() {
+  const c = bgX;
+  c.clearRect(0, 0, W, H);
+
+  if (imgReady('grandcanyon')) {
+    c.drawImage(IMGS.grandcanyon, 0, 0, W, H);
+  } else {
+    const sky = c.createLinearGradient(0, 0, 0, H);
+    sky.addColorStop(0, '#6ba3be'); sky.addColorStop(0.6, '#e8a857'); sky.addColorStop(1, '#c4843c');
+    c.fillStyle = sky; c.fillRect(0, 0, W, H);
+  }
+
+  // Sandy floor strip where objects land
+  const floorH = Math.max(80, H * 0.1);
+  const fy = H - floorH;
+
+  // Soft shadow at the join between image and sand
+  const shadow = c.createLinearGradient(0, fy - 14, 0, fy + 22);
+  shadow.addColorStop(0, 'rgba(0,0,0,0)');
+  shadow.addColorStop(1, 'rgba(70,35,8,0.5)');
+  c.fillStyle = shadow; c.fillRect(0, fy - 14, W, 36);
+
+  // Sand base gradient
+  const sandGrad = c.createLinearGradient(0, fy, 0, H);
+  sandGrad.addColorStop(0,   '#b8884e');
+  sandGrad.addColorStop(0.35,'#c99a62');
+  sandGrad.addColorStop(1,   '#d4ae7a');
+  c.fillStyle = sandGrad; c.fillRect(0, fy, W, floorH);
+
+  // Subtle sand ripple texture
+  c.lineWidth = 1;
+  c.strokeStyle = '#8a6030';
+  for (let i = 0; i < 8; i++) {
+    const ly = fy + 10 + (i / 7) * (floorH - 20);
+    c.globalAlpha = 0.10 + i * 0.018;
+    c.beginPath(); c.moveTo(0, ly);
+    for (let x = 0; x <= W; x += 36) {
+      c.quadraticCurveTo(x + 18, ly + 2.8 * Math.sin(x / 90 + i * 1.3), x + 36, ly);
+    }
+    c.stroke();
+  }
+  c.globalAlpha = 1;
 }
 
 // ── Physics ──────────────────────────────────────────────────────
@@ -471,6 +549,9 @@ const IMGS = {};
 ['banana', 'bowling', 'basketball', 'axe'].forEach(n => {
   IMGS[n] = Object.assign(new Image(), { src: 'assets/' + n + '.png' });
 });
+IMGS['grandcanyon'] = new Image();
+IMGS['grandcanyon'].src = 'assets/backgrounds/grandcanyon.png';
+IMGS['grandcanyon'].onload = () => { if (currentBg === 'grandcanyon') drawRoom(); };
 function imgReady(name) { return IMGS[name].complete && IMGS[name].naturalWidth > 0; }
 
 // ── Axe constants ─────────────────────────────────────────────────
@@ -682,6 +763,21 @@ document.getElementById('clearBtn').addEventListener('click', () => {
   for (const o of objs) World.remove(world, o.body);
   objs.length = 0;
   popEffects.length = 0;
+});
+
+// ── Scene / background switcher ───────────────────────────────────
+document.getElementById('settingsBtn').addEventListener('click', () => {
+  document.getElementById('settingsPanel').classList.toggle('open');
+});
+
+document.querySelectorAll('.bg-opt').forEach(btn => {
+  btn.addEventListener('click', () => {
+    currentBg = btn.dataset.bg;
+    document.querySelectorAll('.bg-opt').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    drawRoom();
+    document.getElementById('settingsPanel').classList.remove('open');
+  });
 });
 </script>
 </body>
