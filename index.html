@@ -164,11 +164,13 @@ const { Engine, World, Bodies, Body, Events, Mouse, MouseConstraint, Query } = M
 const engine = Engine.create({ gravity: { y: 1.8 } });
 const world  = engine.world;
 
+// Boundaries are 2000 px thick so fast-moving bodies (explosion speeds up to
+// 640 px/frame) can never tunnel through in a single physics step.
 World.add(world, [
-  Bodies.rectangle(W/2, H+25,  W*3, 50,  { isStatic:true, friction:0.85, frictionStatic:1.0 }),
-  Bodies.rectangle(-25,  H/2,  50,  H*3, { isStatic:true, friction:0.5 }),
-  Bodies.rectangle(W+25, H/2,  50,  H*3, { isStatic:true, friction:0.5 }),
-  Bodies.rectangle(W/2,  15,   W*3, 60,  { isStatic:true }), // ceiling (bottom edge ≈ y=45)
+  Bodies.rectangle(W/2,   H+1000, W*3,  2000, { isStatic:true, friction:0.85, frictionStatic:1.0 }),
+  Bodies.rectangle(-1000, H/2,    2000, H*3,  { isStatic:true, friction:0.5 }),
+  Bodies.rectangle(W+1000,H/2,    2000, H*3,  { isStatic:true, friction:0.5 }),
+  Bodies.rectangle(W/2,  -955,    W*3,  2000, { isStatic:true }), // bottom edge at y=45
 ]);
 
 const mouse = Mouse.create(fgC);
@@ -495,6 +497,19 @@ function loop(t) {
   const dt = Math.min(t - lastT, 33);
   lastT = t;
   Engine.update(engine, dt);
+
+  // Safety net: if a body somehow escaped the arena, pull it back
+  for (const o of objs) {
+    const p = o.body.position;
+    if (p.x < -200 || p.x > W + 200 || p.y < -400 || p.y > H + 200) {
+      Body.setPosition(o.body, {
+        x: Math.max(100, Math.min(W - 100, p.x)),
+        y: Math.min(H - 100, Math.max(100, p.y)),
+      });
+      Body.setVelocity(o.body, { x: 0, y: 0 });
+      Body.setAngularVelocity(o.body, 0);
+    }
+  }
 
   // Smooth hang: when mouse is held still, bleed off spring oscillation
   if (mc.body) {
