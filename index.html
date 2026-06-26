@@ -356,26 +356,31 @@ function spawnBoom(shape) {
   playExplosion();
   showHint('BOOM!');
 
-  // Blast every physics object outward from explosion centre
-  const blastR = Math.max(shape.r * 2.8, 220);
+  // Blast every physics object outward — all values scale with explosion size.
+  // shape.r ranges [40, 160]: smallest is "pretty strong", largest is insane.
+  const blastR  = shape.r * 4;          // 160 → 640 px radius
+  const baseSpd = shape.r * 4;          // 160 → 640 launch speed
+  const upBias  = shape.r * 0.625;      //  25 → 100 upward kick
   for (const o of objs) {
     const dx = o.body.position.x - shape.cx;
     const dy = o.body.position.y - shape.cy;
     const dist = Math.hypot(dx, dy) || 1;
     const falloff = Math.max(0, 1 - dist / blastR);
     if (falloff > 0) {
-      const speed = 160 * falloff;
+      const speed = baseSpd * falloff;
       Body.setVelocity(o.body, {
         x: o.body.velocity.x + (dx / dist) * speed,
-        y: o.body.velocity.y + (dy / dist) * speed - 25 * falloff,
+        y: o.body.velocity.y + (dy / dist) * speed - upBias * falloff,
       });
     }
   }
 
-  // GIF overlay — cache-bust src so animation always restarts from frame 1
-  const size = Math.max(shape.r * 3.8, 240);
-  const el   = document.createElement('img');
-  el.src     = 'assets/explosion.gif';
+  // GIF overlay — each call gets a fresh blob: URL so the browser treats it as a
+  // new resource and always plays from frame 1, never from a cached mid-frame state.
+  const size    = Math.max(shape.r * 3.8, 240);
+  const el      = document.createElement('img');
+  const blobSrc = BOOM_BLOB ? URL.createObjectURL(BOOM_BLOB) : 'assets/explosion.gif';
+  el.src = blobSrc;
   Object.assign(el.style, {
     position: 'fixed', zIndex: '5', pointerEvents: 'none',
     width: size + 'px', height: size + 'px',
@@ -384,9 +389,9 @@ function spawnBoom(shape) {
     opacity: '1', transition: 'opacity 0.35s',
   });
   document.body.appendChild(el);
-  const fadeAt = Math.max(BOOM_DURATION - 320, 400);
+  const fadeAt = Math.max(BOOM_DURATION - 420, 300);
   setTimeout(() => { el.style.transition = 'opacity 0.28s'; el.style.opacity = '0'; }, fadeAt);
-  setTimeout(() => el.remove(), fadeAt + 320);
+  setTimeout(() => { el.remove(); if (BOOM_BLOB) URL.revokeObjectURL(blobSrc); }, fadeAt + 320);
 }
 
 function spawn(shape) {
@@ -430,6 +435,7 @@ function imgReady(name) { return IMGS[name].complete && IMGS[name].naturalWidth 
 // Parse explosion.gif frame delays so the fade-out lands exactly before the loop.
 // Falls back to 1400ms if fetch isn't available (e.g. file:// protocol).
 let BOOM_DURATION = 1400;
+let BOOM_BLOB     = null; // stored so each explosion gets a unique blob: URL → guaranteed frame-1 restart
 fetch('assets/explosion.gif').then(r => r.arrayBuffer()).then(buf => {
   const b = new Uint8Array(buf);
   let ms = 0, i = 13 + ((b[10] >> 7) ? 3 << ((b[10] & 7) + 1) : 0);
@@ -446,6 +452,7 @@ fetch('assets/explosion.gif').then(r => r.arrayBuffer()).then(buf => {
     } else i++;
   }
   if (ms > 100) BOOM_DURATION = ms;
+  BOOM_BLOB = new Blob([buf], { type: 'image/gif' });
 }).catch(() => {});
 
 // ── Object renderers ─────────────────────────────────────────────
