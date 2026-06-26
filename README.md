@@ -1,1 +1,1 @@
-https://github.com/lcanunayon/Entropy/settings/pages
+https://lcanunayon.github.io/Entropy/
